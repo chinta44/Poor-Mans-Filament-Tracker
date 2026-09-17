@@ -22,6 +22,23 @@ const CURRENCIES = [
 ];
 const currencySymbol = (code) => CURRENCIES.find((c) => c.code === code)?.symbol || code;
 
+// Detection "note" values come from the server in English (internal keys used
+// for logic/CSS matching) — this maps them to Japanese for display only.
+const NOTE_JA = {
+  "auto-select disabled": "自動選択は無効です",
+  "no matching spool": "一致するスプールがありません",
+  "multiple spools match — verify": "複数のスプールが一致しています — 要確認",
+  "multiple spools match — using last loaded, please verify": "複数のスプールが一致 — 前回読み込んだものを使用中、確認してください",
+  "matches loaded spool": "読み込み済みのスプールと一致",
+  "match found, but not switching mid-print": "一致しましたが、印刷中は切り替えません",
+  "auto-loaded": "自動で読み込みました",
+  "verified by user": "確認済み",
+  "loaded from Home Assistant": "Home Assistantから読み込み",
+};
+const noteJa = (n) => NOTE_JA[n] || n;
+
+const KIND_JA = { print: "印刷", failed: "失敗", manual: "手動", adjust: "調整" };
+
 async function api(path, opts) {
   const res = await fetch(path, opts);
   if (!res.ok) throw new Error(`${path}: HTTP ${res.status}`);
@@ -88,15 +105,15 @@ function renderPills() {
   const printer = $("#pill-printer");
   printer.className = "pill " + (st.connected ? "on" : "off");
   printer.innerHTML = pillHTML(
-    "Printer",
-    `${st.mode === "direct" ? "direct" : "via HA"} · ${st.connected ? "online" : "offline"}`
+    "プリンター",
+    `${st.mode === "direct" ? "直接接続" : "HA経由"} · ${st.connected ? "オンライン" : "オフライン"}`
   );
   const haOn = st.ha_available || st.ha_control?.available;
   const ha = $("#pill-ha");
   ha.className = "pill " + (haOn ? "on" : "off");
   ha.innerHTML = pillHTML(
     "Home Assistant",
-    haOn ? (st.ha_control?.available ? "sync + control" : "sync only") : "offline"
+    haOn ? (st.ha_control?.available ? "同期+制御" : "同期のみ") : "オフライン"
   );
   if (st.ha_control?.entity_id) ha.title = st.ha_control.entity_id;
 }
@@ -110,13 +127,13 @@ function renderVerify() {
   const cands = det.candidates.map((c) => `
     <button class="cand" onclick="confirmSpool(${c.id})">
       <span class="swatch xs" style="background:${esc(c.color_hex)}"></span>
-      ${esc(c.label)} <span class="muted">· ${fmt(c.remaining_g)} left</span>
-      ${active && active.id === c.id ? " ✓ current" : ""}
+      ${esc(c.label)} <span class="muted">· 残り${fmt(c.remaining_g)}</span>
+      ${active && active.id === c.id ? " ✓ 現在選択中" : ""}
     </button>`).join("");
   el.innerHTML = `
-    <div class="alert-title">⚠️ Which spool did you load?</div>
-    <div class="muted small">Multiple spools match the filament set on the printer.
-    Usage is going to <b>${esc(active ? spoolLabel(active) : "no spool")}</b> until you confirm.</div>
+    <div class="alert-title">⚠️ どのスプールをセットしましたか？</div>
+    <div class="muted small">プリンターにセットされたフィラメントに一致するスプールが複数あります。
+    確認するまで使用量は<b>${esc(active ? spoolLabel(active) : "スプールなし")}</b>に記録されます。</div>
     <div class="cands">${cands}</div>`;
 }
 
@@ -128,17 +145,17 @@ function renderBanner() {
   if (!printing) return;
   el.innerHTML = `
     <span>🖨️</span>
-    <b>${esc(p.task || "Printing…")}</b>
+    <b>${esc(p.task || "印刷中…")}</b>
     <div class="prog"><div class="bar"><div style="width:${Math.round(p.progress)}%"></div></div></div>
     <span class="num">${Math.round(p.progress)}%</span>
-    <span class="muted small">${p.weight ? "est. " + fmt(p.weight) : "weight pending"}</span>`;
+    <span class="muted small">${p.weight ? "推定 " + fmt(p.weight) : "重量取得中"}</span>`;
 }
 
 function renderHero() {
   const s = state.spools.find((x) => x.active && !x.archived);
   const el = $("#hero");
   if (!s) {
-    el.innerHTML = `<div class="empty" style="width:100%">No spool loaded — add one and hit <b>Load</b>, or set the filament on the printer and let auto-detect find it.</div>`;
+    el.innerHTML = `<div class="empty" style="width:100%">スプールが読み込まれていません — 追加して<b>読み込む</b>を押すか、プリンターにフィラメントをセットして自動検出させてください。</div>`;
     return;
   }
   const p = pct(s);
@@ -146,11 +163,11 @@ function renderHero() {
     <div class="swatch lg" style="background:${esc(s.color_hex)}"></div>
     <div class="info">
       <div class="name">${esc(spoolLabel(s))}</div>
-      <div class="sub">${esc(s.material)} · loaded on external spool</div>
+      <div class="sub">${esc(s.material)} · 外部スプールにセット中</div>
       <div class="bar ${barClass(p)}"><div style="width:${p}%"></div></div>
-      <div class="nums"><b class="num">${fmt(s.remaining_g)}</b> of ${fmt(s.initial_weight_g)} · ${p.toFixed(0)}%</div>
+      <div class="nums"><b class="num">${fmt(s.remaining_g)}</b> / ${fmt(s.initial_weight_g)} · ${p.toFixed(0)}%</div>
     </div>
-    <button class="btn small" onclick="openUse(${s.id})">Log usage</button>`;
+    <button class="btn small" onclick="openUse(${s.id})">使用量を記録</button>`;
 }
 
 function renderDetection() {
@@ -163,10 +180,10 @@ function renderDetection() {
   const label = det.type || det.name || "?";
   el.className = "detect" + (info.note === "no matching spool" ? " warn" : "");
   el.innerHTML =
-    `🎯 printer filament: ` +
+    `🎯 プリンターのフィラメント: ` +
     (det.color ? `<span class="swatch xs" style="background:${esc(det.color.slice(0, 7))}"></span>` : "") +
     `<b>${esc(label)}</b>` +
-    (info.note ? `<span>— ${esc(info.note)}</span>` : "");
+    (info.note ? `<span>— ${esc(noteJa(info.note))}</span>` : "");
 }
 
 function renderSpools() {
@@ -178,19 +195,19 @@ function renderSpools() {
       <div class="head">
         <div class="swatch sm" style="background:${esc(s.color_hex)}"></div>
         <div class="name">${esc(spoolLabel(s))}</div>
-        <div class="tag ${s.active ? "loaded" : ""}">${s.active ? "LOADED" : esc(s.material)}</div>
+        <div class="tag ${s.active ? "loaded" : ""}">${s.active ? "セット中" : esc(s.material)}</div>
       </div>
       <div class="bar ${barClass(p)}"><div style="width:${p}%"></div></div>
-      <div class="meta num">${fmt(s.remaining_g)} left · ${esc(s.material)}${s.cost ? " · " + currencySymbol(state.currency) + s.cost : ""}</div>
-      ${spent != null ? `<div class="meta num muted small">${fmtCost(spent)} spent so far</div>` : ""}
+      <div class="meta num">残り${fmt(s.remaining_g)} · ${esc(s.material)}${s.cost ? " · " + currencySymbol(state.currency) + s.cost : ""}</div>
+      ${spent != null ? `<div class="meta num muted small">これまでに${fmtCost(spent)}使用</div>` : ""}
       <div class="btns">
-        ${s.active ? "" : `<button class="btn small primary" onclick="activate(${s.id})">Load</button>`}
-        <button class="btn small" onclick="openEdit(${s.id})">Edit</button>
-        <button class="btn small ghost" onclick="archive(${s.id}, ${s.archived ? "false" : "true"})">${s.archived ? "Restore" : "Archive"}</button>
-        <button class="btn small ghost danger" onclick="removeSpool(${s.id})">Delete</button>
+        ${s.active ? "" : `<button class="btn small primary" onclick="activate(${s.id})">読み込む</button>`}
+        <button class="btn small" onclick="openEdit(${s.id})">編集</button>
+        <button class="btn small ghost" onclick="archive(${s.id}, ${s.archived ? "false" : "true"})">${s.archived ? "復元" : "アーカイブ"}</button>
+        <button class="btn small ghost danger" onclick="removeSpool(${s.id})">削除</button>
       </div>
     </div>`;
-  }).join("") || `<div class="card empty" style="grid-column:1/-1">No spools yet — add your first one.</div>`;
+  }).join("") || `<div class="card empty" style="grid-column:1/-1">スプールがありません — 最初の1本を追加しましょう。</div>`;
 }
 
 function usageRow(u, showEdit) {
@@ -198,13 +215,13 @@ function usageRow(u, showEdit) {
   const cost = rowCost(u);
   return `
   <div class="rowitem">
-    <span class="kind ${zero ? "zero" : esc(u.kind)}">${zero ? "0 g?" : esc(u.kind)}</span>
+    <span class="kind ${zero ? "zero" : esc(u.kind)}">${zero ? "0g？" : esc(KIND_JA[u.kind] || u.kind)}</span>
     <div class="job">${esc(u.job_name)}</div>
     <div class="spoolchip"><span class="swatch xs" style="background:${esc(u.color_hex)}"></span>${esc(u.brand)} ${esc(u.name)}</div>
-    <div class="when">${new Date(u.ts).toLocaleString([], { dateStyle: "medium", timeStyle: "short" })}</div>
+    <div class="when">${new Date(u.ts).toLocaleString("ja-JP", { dateStyle: "medium", timeStyle: "short" })}</div>
     <div class="grams num">${u.grams < 0 ? "+" + fmt(-u.grams) : fmt(u.grams)}</div>
     <div class="cost num muted">${cost != null ? (cost < 0 ? "+" + fmtCost(-cost) : fmtCost(cost)) : ""}</div>
-    ${showEdit ? `<button class="btn small ghost" title="Edit / reassign" onclick="openUsage(${u.id})">✎</button>` : ""}
+    ${showEdit ? `<button class="btn small ghost" title="編集 / 割り当て変更" onclick="openUsage(${u.id})">✎</button>` : ""}
   </div>`;
 }
 
@@ -218,21 +235,21 @@ function renderRecent() {
       .map((s) => `<option value="${s.id}">${esc(spoolLabel(s))}</option>`).join("");
   }
   el.innerHTML = prints.map((u) => usageRow(u, true)).join("") ||
-    `<div class="empty">No prints since the current spool was loaded.</div>`;
+    `<div class="empty">現在のスプールを読み込んでから印刷はありません。</div>`;
 }
 
 function renderHistory() {
   $("#history").innerHTML = state.usage.map((u) => usageRow(u, u.kind !== "adjust")).join("") ||
-    `<div class="empty">Nothing here yet — finish a print and it shows up.</div>`;
+    `<div class="empty">まだ何もありません — 印刷が完了すると表示されます。</div>`;
 }
 
 /* ---- actions ---- */
-window.activate = async (id) => { await post(`api/spools/${id}/activate`); toast("Spool loaded"); refresh(); };
-window.confirmSpool = async (id) => { await post("api/detection/confirm", { spool_id: id }); toast("Thanks — spool verified"); refresh(); };
+window.activate = async (id) => { await post(`api/spools/${id}/activate`); toast("スプールを読み込みました"); refresh(); };
+window.confirmSpool = async (id) => { await post("api/detection/confirm", { spool_id: id }); toast("ありがとうございます — スプールを確認しました"); refresh(); };
 window.archive = async (id, flag) => { await post(`api/spools/${id}/archive`, { archived: flag }); refresh(); };
 window.removeSpool = async (id) => {
   const s = state.spools.find((x) => x.id === id);
-  if (!confirm(`Delete "${spoolLabel(s)}" and its history? Archiving keeps the history.`)) return;
+  if (!confirm(`「${spoolLabel(s)}」と履歴を削除しますか？アーカイブすれば履歴は残ります。`)) return;
   await api(`api/spools/${id}`, { method: "DELETE" });
   refresh();
 };
@@ -241,7 +258,7 @@ $("#moveall-btn").onclick = async () => {
   const target = parseInt($("#moveall-select").value);
   const prints = state.recent.filter((u) => u.kind !== "adjust" && u.spool_id !== target);
   for (const u of prints) await put(`api/usage/${u.id}`, { spool_id: target });
-  toast(`Moved ${prints.length} print${prints.length === 1 ? "" : "s"}`);
+  toast(`${prints.length}件の印刷を移動しました`);
   refresh();
 };
 
@@ -249,7 +266,7 @@ $("#moveall-btn").onclick = async () => {
 const dialog = $("#spool-dialog"), form = $("#spool-form");
 
 const GENERIC_MATERIALS = ["PLA+", "PLA", "PLA Matte", "PLA Silk", "PETG",
-  "ABS", "ASA", "TPU", "PC", "PA", "Other"];
+  "ABS", "ASA", "TPU", "PC", "PA", "その他"];
 
 const brandColors = () =>
   (state.catalog?.brands || []).find((b) => b.name === form.brand.value)?.colors || [];
@@ -305,7 +322,7 @@ $("#btn-add").onclick = () => {
   form.id.value = "";
   form.brand.value = state.catalog?.brands?.some((b) => b.name === "Numakers") ? "Numakers" : form.brand.value;
   fillMaterials("PLA+");
-  $("#dialog-title").textContent = "Add spool";
+  $("#dialog-title").textContent = "スプールを追加";
   renderSwatches();
   dialog.showModal();
 };
@@ -313,11 +330,11 @@ $("#btn-add").onclick = () => {
 window.openEdit = (id) => {
   const s = state.spools.find((x) => x.id === id);
   form.reset();
-  form.brand.value = [...form.brand.options].some((o) => o.value === s.brand) ? s.brand : "Other";
+  form.brand.value = [...form.brand.options].some((o) => o.value === s.brand) ? s.brand : "その他";
   fillMaterials(s.material);
   for (const f of ["id", "name", "color_hex", "initial_weight_g", "remaining_g", "cost", "notes"])
     if (form[f] && s[f] != null) form[f].value = s[f];
-  $("#dialog-title").textContent = "Edit spool";
+  $("#dialog-title").textContent = "スプールを編集";
   renderSwatches();
   dialog.showModal();
 };
@@ -337,7 +354,7 @@ form.onsubmit = async (e) => {
   if (d.id) await put(`api/spools/${d.id}`, body);
   else await post("api/spools", body);
   dialog.close();
-  toast(d.id ? "Spool updated" : "Spool added");
+  toast(d.id ? "スプールを更新しました" : "スプールを追加しました");
   refresh();
 };
 
@@ -348,7 +365,7 @@ $("#btn-use-cancel").onclick = () => useDialog.close();
 useForm.onsubmit = async (e) => {
   e.preventDefault();
   const d = Object.fromEntries(new FormData(useForm));
-  await post(`api/spools/${d.id}/use`, { grams: parseFloat(d.grams), job_name: d.job_name || "Manual entry" });
+  await post(`api/spools/${d.id}/use`, { grams: parseFloat(d.grams), job_name: d.job_name || "手動入力" });
   useDialog.close();
   refresh();
 };
@@ -361,7 +378,7 @@ window.openUsage = (id) => {
   usageForm.reset();
   usageForm.id.value = id;
   usageForm.grams.value = u.grams;
-  $("#usage-job").textContent = `${u.job_name} · ${new Date(u.ts).toLocaleString()}`;
+  $("#usage-job").textContent = `${u.job_name} · ${new Date(u.ts).toLocaleString("ja-JP")}`;
   usageForm.spool_id.innerHTML = state.spools
     .filter((s) => !s.archived || s.id === u.spool_id)
     .map((s) => `<option value="${s.id}" ${s.id === u.spool_id ? "selected" : ""}>${esc(spoolLabel(s))}</option>`)
@@ -374,7 +391,7 @@ usageForm.onsubmit = async (e) => {
   const d = Object.fromEntries(new FormData(usageForm));
   await put(`api/usage/${d.id}`, { grams: parseFloat(d.grams), spool_id: parseInt(d.spool_id) });
   usageDialog.close();
-  toast("Print updated");
+  toast("印刷情報を更新しました");
   refresh();
 };
 
@@ -400,7 +417,7 @@ currencySelect.onchange = async () => {
   state.currency = currencySelect.value;
   render();
   await post("api/settings/currency", { currency: state.currency });
-  toast(`Currency set to ${currencySelect.value}`);
+  toast(`通貨を${currencySelect.value}に設定しました`);
 };
 
 /* ---- boot ---- */
